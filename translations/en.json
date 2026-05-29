@@ -1,0 +1,22 @@
+{
+  "app": {
+    "name": "XCHK Verification",
+    "short_description": "Open live identity verification for this ticket.",
+    "long_description": "Launch XCHK helpdesk verification with the ticket requester email and phone. Agents run a live verify session in XCHK; PASS/FAIL can sync back to the Zendesk ticket when OAuth is connected in XCHK.",
+    "installation_instructions": "1. In XCHK helpdesk, open **API & Webhooks → Integrations** and generate an API key.\n\n2. In Zendesk Admin → **Apps and integrations → Zendesk Support apps**, install XCHK Verification.\n\n3. Set **XCHK base URL** to `https://in.xchk.io` (or your XCHK host).\n\n4. Set **XCHK integrator token** to the API key from step 1 (secure field).\n\n5. Optionally set **Zendesk subdomain override** if auto-detection fails.\n\n6. In XCHK, open **API & Webhooks → Zendesk** and connect OAuth for PASS/FAIL ticket sync.",
+    "parameters": {
+      "xchk_base_url": {
+        "label": "XCHK base URL",
+        "helpText": "Production: https://in.xchk.io"
+      },
+      "xchk_integrator_token": {
+        "label": "XCHK integrator token",
+        "helpText": "API key from XCHK helpdesk → API & Webhooks → Integrations → Generate key"
+      },
+      "zendesk_subdomain": {
+        "label": "Zendesk subdomain override (optional)",
+        "helpText": "Leave blank to auto-detect from the current Zendesk account"
+      }
+    }
+  }
+}

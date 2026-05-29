@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>XCHK</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      margin: 0;
+      padding: 10px;
+      font-size: 12px;
+      color: #2f3941;
+    }
+    h2 { font-size: 14px; margin: 0 0 6px; }
+    p { margin: 0 0 8px; line-height: 1.35; color: #68737d; }
+    .meta { font-size: 12px; margin-bottom: 8px; }
+    .meta strong { color: #2f3941; }
+    button {
+      width: 100%;
+      padding: 8px 12px;
+      background: #03C03C;
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      font-weight: 600;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    button:hover { background: #02a833; }
+    button:disabled { opacity: 0.6; cursor: not-allowed; }
+    .err { color: #c72a29; font-size: 11px; margin-top: 6px; }
+  </style>
+  <script src="https://static.zdassets.com/zendesk_app_framework_sdk/2.0/zaf_sdk.min.js"></script>
+</head>
+<body>
+  <p>Verify this requester in a live session.</p>
+  <div class="meta" id="requesterMeta">Loading requester…</div>
+  <button type="button" id="openHelpdeskBtn">Open Verification Session</button>
+  <p class="err" id="errorEl" style="display:none;"></p>
+  <script>
+    (function() {
+      var client = ZAFClient.init();
+      var metaEl = document.getElementById('requesterMeta');
+      var errEl = document.getElementById('errorEl');
+      var btn = document.getElementById('openHelpdeskBtn');
+
+      function showError(msg) {
+        errEl.textContent = msg;
+        errEl.style.display = 'block';
+      }
+
+      function normalizeSubdomain(value) {
+        if (!value) return '';
+        return String(value).trim().toLowerCase().replace(/\.zendesk\.com$/i, '');
+      }
+
+      function extractRequesterInfo(payload) {
+        var requester = payload && payload['ticket.requester'] ? payload['ticket.requester'] : (payload || {});
+        return {
+          id: requester.id || null,
+          email: requester.email || '',
+          phone: requester.phone || requester.mobile || requester.phoneNumber || ''
+        };
+      }
+
+      function mintLaunchUrl(baseUrl, payload) {
+        var root = (baseUrl || 'https://in.xchk.io').replace(/\/$/, '');
+        return client.request({
+          url: root + '/api/integrator/zendesk/mint-launch',
+          type: 'POST',
+          contentType: 'application/json',
+          headers: { 'X-API-Key': '{{setting.xchk_integrator_token}}' },
+          data: JSON.stringify(payload),
+          dataType: 'json',
+          secure: true
+        }).then(function(resp) {
+          var data = resp && resp.responseJSON ? resp.responseJSON : resp;
+          if (data && data.error) {
+            throw new Error(data.error);
+          }
+          return data.launchUrl || data.helpdeskUrl;
+        });
+      }
+
+      client.on('app.registered', function() {
+        Promise.allSettled([
+          client.get('ticket.id'),
+          client.get('ticket.requester.email'),
+          client.get('ticket.requester'),
+          client.metadata(),
+          client.context()
+        ]).then(function(results) {
+          var ticketId = results[0].status === 'fulfilled' ? (results[0].value && results[0].value['ticket.id']) || '' : '';
+          var directEmail = results[1].status === 'fulfilled'
+            ? (results[1].value && results[1].value['ticket.requester.email']) || ''
+            : '';
+          var requesterInfo = extractRequesterInfo(results[2].status === 'fulfilled' ? (results[2].value || {}) : {});
+          var email = directEmail || requesterInfo.email || '';
+          var phone = requesterInfo.phone || '';
+          var requesterId = requesterInfo.id;
+
+          var settings = results[3].status === 'fulfilled' ? (results[3].value && results[3].value.settings) || {} : {};
+          var context = results[4].status === 'fulfilled' ? (results[4].value || {}) : {};
+          var baseUrl = settings.xchk_base_url || 'https://in.xchk.io';
+          var subdomain = normalizeSubdomain(settings.zendesk_subdomain)
+            || normalizeSubdomain(context.account && context.account.subdomain);
+
+          if (!subdomain) {
+            metaEl.textContent = 'Could not detect Zendesk subdomain.';
+            btn.disabled = true;
+            showError('Reinstall the app or set zendesk_subdomain in app settings.');
+            return;
+          }
+
+          function finalize(emailValue, phoneValue) {
+            if (!emailValue) {
+              metaEl.innerHTML = '<strong>Ticket #' + ticketId + '</strong><br>No requester email on this ticket/profile.';
+              btn.disabled = true;
+              showError('Add a requester email to the customer profile before verifying.');
+              return;
+            }
+
+            metaEl.innerHTML =
+              '<strong>Ticket #' + ticketId + '</strong><br>' +
+              '<span style="color:#68737d;">' + subdomain + '.zendesk.com</span><br>' +
+              'Email: ' + emailValue +
+              (phoneValue ? '<br>Phone: ' + phoneValue : '');
+
+            btn.onclick = function() {
+              btn.disabled = true;
+              btn.textContent = 'Opening…';
+              errEl.style.display = 'none';
+              mintLaunchUrl(baseUrl, {
+                email: emailValue,
+                mobile: phoneValue || undefined,
+                ticketId: String(ticketId),
+                subdomain: subdomain
+              }).then(function(url) {
+                if (!url) throw new Error('No launch URL returned');
+                window.open(url, 'xchk_helpdesk', 'width=1280,height=900,resizable=yes,scrollbars=yes');
+              }).catch(function(e) {
+                var msg = e.message || String(e);
+                if (/403|401|API key|Invalid token/i.test(msg)) {
+                  msg = 'Integrator token missing or invalid. In Zendesk app settings, set XCHK integrator token to a key from XCHK → API & Webhooks → Integrations.';
+                }
+                showError(msg);
+              }).finally(function() {
+                btn.disabled = false;
+                btn.textContent = 'Open Verification Session';
+              });
+            };
+          }
+
+          if (email || !requesterId) {
+            finalize(email, phone);
+            return;
+          }
+
+          client.request({
+            url: '/api/v2/users/' + encodeURIComponent(requesterId) + '.json',
+            type: 'GET',
+            dataType: 'json'
+          }).then(function(userResponse) {
+            var user = userResponse && userResponse.user ? userResponse.user : {};
+            finalize(user.email || email, user.phone || user.phone_number || phone);
+          }).catch(function() {
+            finalize(email, phone);
+          });
+        }).catch(function(e) {
+          metaEl.textContent = 'Could not load ticket.';
+          showError(e.message || String(e));
+          btn.disabled = true;
+        });
+      });
+    })();
+  </script>
+</body>
+</html>

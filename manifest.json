@@ -1,0 +1,42 @@
+{
+  "name": "XCHK Verification",
+  "author": {
+    "name": "XCHK",
+    "email": "support@xchk.io",
+    "url": "https://in.xchk.io"
+  },
+  "defaultLocale": "en",
+  "private": false,
+  "location": {
+    "support": {
+      "ticket_sidebar": "assets/iframe.html"
+    }
+  },
+  "version": "1.0.12",
+  "frameworkVersion": "2.0",
+  "domainWhitelist": [
+    "in.xchk.io",
+    "xchk.io"
+  ],
+  "parameters": [
+    {
+      "name": "xchk_base_url",
+      "type": "text",
+      "default": "https://in.xchk.io",
+      "required": true
+    },
+    {
+      "name": "xchk_integrator_token",
+      "type": "text",
+      "secure": true,
+      "required": true,
+      "scopes": ["header"]
+    },
+    {
+      "name": "zendesk_subdomain",
+      "type": "text",
+      "default": "",
+      "required": false
+    }
+  ]
+}
