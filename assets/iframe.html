@@ -41,7 +41,7 @@
   <div class="meta" id="requesterMeta">Loading requester…</div>
   <button type="button" id="openHelpdeskBtn">Open Verification Session</button>
   <p class="err" id="errorEl" style="display:none;"></p>
-  <div class="diag" id="diagEl">v1.0.15 — loading…</div>
+  <div class="diag" id="diagEl">v1.0.16 — loading…</div>
   <script>
     (function() {
       var client = ZAFClient.init();
@@ -50,7 +50,7 @@
       var diagEl = document.getElementById('diagEl');
       var btn = document.getElementById('openHelpdeskBtn');
 
-      function setDiag(msg) { diagEl.textContent = 'v1.0.15 | ' + msg; }
+      function setDiag(msg) { diagEl.textContent = 'v1.0.16 | ' + msg; }
       function showError(msg) { errEl.textContent = msg; errEl.style.display = 'block'; }
 
       function normalizeSubdomain(value) {
@@ -178,6 +178,7 @@
             mintLaunchUrl(baseUrl, {
               email: emailValue, mobile: phoneValue || undefined,
               ticketId: String(ticketId), subdomain: subdomain,
+              requesterId: requesterId != null ? String(requesterId) : undefined,
               operatorEmail: opEmail || undefined,
               operatorName: opName || undefined,
               operatorUserId: opUserId || undefined
