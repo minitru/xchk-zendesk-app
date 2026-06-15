@@ -88,7 +88,8 @@
           client.get('ticket.requester.email'),
           client.get('ticket.requester'),
           client.metadata(),
-          client.context()
+          client.context(),
+          client.get('currentUser')
         ]).then(function(results) {
           var ticketId = results[0].status === 'fulfilled' ? (results[0].value && results[0].value['ticket.id']) || '' : '';
           var directEmail = results[1].status === 'fulfilled'
@@ -105,6 +106,12 @@
           var subdomain = normalizeSubdomain(settings.zendesk_subdomain)
             || normalizeSubdomain(context.account && context.account.subdomain);
 
+          // Capture operator (agent) identity via ZAF v2 built-in — no REST API call, no OAuth prompt
+          var cu = results[5].status === 'fulfilled' ? (results[5].value && results[5].value['currentUser']) || {} : {};
+          var operatorEmail = cu.email || '';
+          var operatorName = cu.name || '';
+          var operatorUserId = cu.id != null ? String(cu.id) : '';
+
           if (!subdomain) {
             metaEl.textContent = 'Could not detect Zendesk subdomain.';
             btn.disabled = true;
@@ -112,7 +119,7 @@
             return;
           }
 
-          function finalize(emailValue, phoneValue) {
+          function finalize(emailValue, phoneValue, opEmail, opName, opUserId) {
             if (!emailValue) {
               metaEl.innerHTML = '<strong>Ticket #' + ticketId + '</strong><br>No requester email on this ticket/profile.';
               btn.disabled = true;
@@ -120,11 +127,17 @@
               return;
             }
 
+            var agentLabel = '';
+            if (opEmail || opName) {
+              agentLabel = '<br>Agent: ' + (opName && opEmail ? (opName + ' &lt;' + opEmail + '&gt;') : (opName || opEmail));
+            }
+
             metaEl.innerHTML =
               '<strong>Ticket #' + ticketId + '</strong><br>' +
               '<span style="color:#68737d;">' + subdomain + '.zendesk.com</span><br>' +
               'Email: ' + emailValue +
-              (phoneValue ? '<br>Phone: ' + phoneValue : '');
+              (phoneValue ? '<br>Phone: ' + phoneValue : '') +
+              agentLabel;
 
             btn.onclick = function() {
               btn.disabled = true;
@@ -134,7 +147,10 @@
                 email: emailValue,
                 mobile: phoneValue || undefined,
                 ticketId: String(ticketId),
-                subdomain: subdomain
+                subdomain: subdomain,
+                operatorEmail: opEmail || undefined,
+                operatorName: opName || undefined,
+                operatorUserId: opUserId || undefined
               }).then(function(url) {
                 if (!url) throw new Error('No launch URL returned');
                 window.open(url, 'xchk_helpdesk', 'width=1280,height=900,resizable=yes,scrollbars=yes');
@@ -152,7 +168,7 @@
           }
 
           if (email || !requesterId) {
-            finalize(email, phone);
+            finalize(email, phone, operatorEmail, operatorName, operatorUserId);
             return;
           }
 
@@ -162,9 +178,9 @@
             dataType: 'json'
           }).then(function(userResponse) {
             var user = userResponse && userResponse.user ? userResponse.user : {};
-            finalize(user.email || email, user.phone || user.phone_number || phone);
+            finalize(user.email || email, user.phone || user.phone_number || phone, operatorEmail, operatorName, operatorUserId);
           }).catch(function() {
-            finalize(email, phone);
+            finalize(email, phone, operatorEmail, operatorName, operatorUserId);
           });
         }).catch(function(e) {
           metaEl.textContent = 'Could not load ticket.';
