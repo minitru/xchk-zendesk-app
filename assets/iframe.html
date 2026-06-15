@@ -29,7 +29,7 @@
     button:hover { background: #02a833; }
     button:disabled { opacity: 0.6; cursor: not-allowed; }
     .err { color: #c72a29; font-size: 11px; margin-top: 6px; }
-    .debug { color: #68737d; font-size: 10px; margin-top: 4px; font-family: monospace; }
+    .debug { color: #68737d; font-size: 10px; margin-top: 4px; font-family: monospace; word-break: break-all; }
   </style>
   <script src="https://static.zdassets.com/zendesk_app_framework_sdk/2.0/zaf_sdk.min.js"></script>
 </head>
@@ -91,51 +91,96 @@
       }
 
       client.on('app.registered', function() {
+        var ticketId, directEmail, requesterInfo, email, phone, requesterId;
+        var settings, context, baseUrl, subdomain;
+        var operatorEmail = '', operatorName = '', operatorUserId = '';
+
         Promise.allSettled([
           client.get('ticket.id'),
           client.get('ticket.requester.email'),
           client.get('ticket.requester'),
           client.metadata(),
-          client.context(),
-          client.get('currentUser')
+          client.context()
         ]).then(function(results) {
-          var ticketId = results[0].status === 'fulfilled' ? (results[0].value && results[0].value['ticket.id']) || '' : '';
-          var directEmail = results[1].status === 'fulfilled'
+          ticketId = results[0].status === 'fulfilled' ? (results[0].value && results[0].value['ticket.id']) || '' : '';
+          directEmail = results[1].status === 'fulfilled'
             ? (results[1].value && results[1].value['ticket.requester.email']) || ''
             : '';
-          var requesterInfo = extractRequesterInfo(results[2].status === 'fulfilled' ? (results[2].value || {}) : {});
-          var email = directEmail || requesterInfo.email || '';
-          var phone = requesterInfo.phone || '';
-          var requesterId = requesterInfo.id;
+          requesterInfo = extractRequesterInfo(results[2].status === 'fulfilled' ? (results[2].value || {}) : {});
+          email = directEmail || requesterInfo.email || '';
+          phone = requesterInfo.phone || '';
+          requesterId = requesterInfo.id;
 
-          var settings = results[3].status === 'fulfilled' ? (results[3].value && results[3].value.settings) || {} : {};
-          var context = results[4].status === 'fulfilled' ? (results[4].value || {}) : {};
-          var baseUrl = settings.xchk_base_url || 'https://in.xchk.io';
-          var subdomain = normalizeSubdomain(settings.zendesk_subdomain)
+          settings = results[3].status === 'fulfilled' ? (results[3].value && results[3].value.settings) || {} : {};
+          context = results[4].status === 'fulfilled' ? (results[4].value || {}) : {};
+          baseUrl = settings.xchk_base_url || 'https://in.xchk.io';
+          subdomain = normalizeSubdomain(settings.zendesk_subdomain)
             || normalizeSubdomain(context.account && context.account.subdomain);
-
-          // Operator (agent) identity via ZAF v2 client.get('currentUser')
-          // This is a ZAF SDK built-in getter — NOT a REST API call, no OAuth needed.
-          // Response shape: { currentUser: { id, email, name, role, ... } }
-          var cuRaw = results[5].status === 'fulfilled' ? results[5].value : null;
-          var cu = null;
-          if (cuRaw && cuRaw.currentUser) {
-            cu = cuRaw.currentUser;
-          } else if (cuRaw && cuRaw.id !== undefined) {
-            // Some ZAF versions return the user object directly
-            cu = cuRaw;
-          }
-          var operatorEmail = (cu && cu.email) ? String(cu.email).trim() : '';
-          var operatorName = (cu && cu.name) ? String(cu.name).trim() : '';
-          var operatorUserId = (cu && cu.id != null) ? String(cu.id) : '';
-
-          showDebug('currentUser raw: ' + JSON.stringify(cuRaw) + ' | op=' + (operatorEmail || '(none)'));
 
           if (!subdomain) {
             metaEl.textContent = 'Could not detect Zendesk subdomain.';
             btn.disabled = true;
             showError('Reinstall the app or set zendesk_subdomain in app settings.');
             return;
+          }
+
+          // Try client.get('currentUser') as a full object
+          return client.get('currentUser');
+        }).then(function(cuResult) {
+          // cuResult shape: { currentUser: {id, email, name, ...} } or direct {id, email, name}
+          var cu = (cuResult && cuResult.currentUser) || cuResult || {};
+          operatorEmail = (cu && cu.email) ? String(cu.email).trim() : '';
+          operatorName = (cu && cu.name) ? String(cu.name).trim() : '';
+          operatorUserId = (cu && cu.id != null) ? String(cu.id) : '';
+
+          showDebug('GET currentUser=' + JSON.stringify(cuResult).slice(0, 200));
+
+          if (operatorEmail || operatorName) {
+            finishSetup();
+            return;
+          }
+
+          // Fallback: try individual field access
+          showDebug('GET currentUser (full) empty, trying fields...');
+          return Promise.allSettled([
+            client.get('currentUser.id'),
+            client.get('currentUser.email'),
+            client.get('currentUser.name')
+          ]);
+        }).then(function(fieldResults) {
+          if (!fieldResults || !Array.isArray(fieldResults)) {
+            // No fallback needed — we already had data or finishSetup was called
+            return;
+          }
+          var idVal = fieldResults[0].status === 'fulfilled' ? fieldResults[0].value : null;
+          var emailVal = fieldResults[1].status === 'fulfilled' ? fieldResults[1].value : null;
+          var nameVal = fieldResults[2].status === 'fulfilled' ? fieldResults[2].value : null;
+
+          showDebug('FIELDS id=' + JSON.stringify(idVal) + ' email=' + JSON.stringify(emailVal) + ' name=' + JSON.stringify(nameVal));
+
+          // Individual field returns may be wrapped as { 'currentUser.id': val } or just val
+          var extractField = function(raw, key) {
+            if (!raw) return '';
+            if (typeof raw === 'string') return raw;
+            if (raw[key]) return String(raw[key]);
+            if (raw.value) return String(raw.value);
+            return '';
+          };
+          operatorUserId = extractField(idVal, 'currentUser.id') || operatorUserId;
+          operatorEmail = extractField(emailVal, 'currentUser.email') || operatorEmail;
+          operatorName = extractField(nameVal, 'currentUser.name') || operatorName;
+
+          finishSetup();
+        }).catch(function(e) {
+          showDebug('currentUser error: ' + (e.message || String(e)));
+          finishSetup();
+        });
+
+        function finishSetup() {
+          if (!operatorEmail && !operatorName) {
+            showDebug('v1.0.14 | currentUser: unavailable — operator info will be on the ticket');
+          } else {
+            showDebug('v1.0.14 | Agent: ' + (operatorName || '') + ' <' + (operatorEmail || '') + '>');
           }
 
           function finalize(emailValue, phoneValue, opEmail, opName, opUserId) {
@@ -201,11 +246,7 @@
           }).catch(function() {
             finalize(email, phone, operatorEmail, operatorName, operatorUserId);
           });
-        }).catch(function(e) {
-          metaEl.textContent = 'Could not load ticket.';
-          showError(e.message || String(e));
-          btn.disabled = true;
-        });
+        }
       });
     })();
   </script>
