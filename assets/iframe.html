@@ -29,7 +29,10 @@
     button:hover { background: #02a833; }
     button:disabled { opacity: 0.6; cursor: not-allowed; }
     .err { color: #c72a29; font-size: 11px; margin-top: 6px; }
-    .debug { color: #68737d; font-size: 10px; margin-top: 4px; font-family: monospace; word-break: break-all; }
+    .diag {
+      font-size: 10px; font-family: monospace; margin-top: 6px; padding: 4px 6px;
+      background: #f5f5f5; border-radius: 3px; color: #68737d; word-break: break-all;
+    }
   </style>
   <script src="https://static.zdassets.com/zendesk_app_framework_sdk/2.0/zaf_sdk.min.js"></script>
 </head>
@@ -38,24 +41,17 @@
   <div class="meta" id="requesterMeta">Loading requester…</div>
   <button type="button" id="openHelpdeskBtn">Open Verification Session</button>
   <p class="err" id="errorEl" style="display:none;"></p>
-  <p class="debug" id="debugEl" style="display:none;"></p>
+  <div class="diag" id="diagEl">v1.0.15 — loading…</div>
   <script>
     (function() {
       var client = ZAFClient.init();
       var metaEl = document.getElementById('requesterMeta');
       var errEl = document.getElementById('errorEl');
-      var debugEl = document.getElementById('debugEl');
+      var diagEl = document.getElementById('diagEl');
       var btn = document.getElementById('openHelpdeskBtn');
 
-      function showError(msg) {
-        errEl.textContent = msg;
-        errEl.style.display = 'block';
-      }
-
-      function showDebug(msg) {
-        debugEl.textContent = msg;
-        debugEl.style.display = 'block';
-      }
+      function setDiag(msg) { diagEl.textContent = 'v1.0.15 | ' + msg; }
+      function showError(msg) { errEl.textContent = msg; errEl.style.display = 'block'; }
 
       function normalizeSubdomain(value) {
         if (!value) return '';
@@ -64,37 +60,40 @@
 
       function extractRequesterInfo(payload) {
         var requester = payload && payload['ticket.requester'] ? payload['ticket.requester'] : (payload || {});
-        return {
-          id: requester.id || null,
-          email: requester.email || '',
-          phone: requester.phone || requester.mobile || requester.phoneNumber || ''
-        };
+        return { id: requester.id || null, email: requester.email || '', phone: requester.phone || requester.mobile || requester.phoneNumber || '' };
+      }
+
+      function extractCurrentUser(raw) {
+        if (!raw) return {};
+        // Shape 1: { currentUser: {id, email, name} }
+        if (raw.currentUser) return raw.currentUser;
+        // Shape 2: { 'currentUser.id': '...' } or { 'currentUser.email': '...' }
+        if (raw['currentUser.id'] !== undefined || raw['currentUser.email'] !== undefined) {
+          return { id: raw['currentUser.id'], email: raw['currentUser.email'], name: raw['currentUser.name'] };
+        }
+        // Shape 3: bare {id, email, name}
+        if (raw.id !== undefined || raw.email !== undefined) return raw;
+        return {};
       }
 
       function mintLaunchUrl(baseUrl, payload) {
         var root = (baseUrl || 'https://in.xchk.io').replace(/\/$/, '');
         return client.request({
           url: root + '/api/integrator/zendesk/mint-launch',
-          type: 'POST',
-          contentType: 'application/json',
+          type: 'POST', contentType: 'application/json',
           headers: { 'X-API-Key': '{{setting.xchk_integrator_token}}' },
-          data: JSON.stringify(payload),
-          dataType: 'json',
-          secure: true
+          data: JSON.stringify(payload), dataType: 'json', secure: true
         }).then(function(resp) {
           var data = resp && resp.responseJSON ? resp.responseJSON : resp;
-          if (data && data.error) {
-            throw new Error(data.error);
-          }
+          if (data && data.error) throw new Error(data.error);
           return data.launchUrl || data.helpdeskUrl;
         });
       }
 
-      client.on('app.registered', function() {
-        var ticketId, directEmail, requesterInfo, email, phone, requesterId;
-        var settings, context, baseUrl, subdomain;
-        var operatorEmail = '', operatorName = '', operatorUserId = '';
+      function boot() {
+        setDiag('boot');
 
+        // Fetch ticket info + context first (5 calls we know work)
         Promise.allSettled([
           client.get('ticket.id'),
           client.get('ticket.requester.email'),
@@ -102,151 +101,121 @@
           client.metadata(),
           client.context()
         ]).then(function(results) {
-          ticketId = results[0].status === 'fulfilled' ? (results[0].value && results[0].value['ticket.id']) || '' : '';
-          directEmail = results[1].status === 'fulfilled'
-            ? (results[1].value && results[1].value['ticket.requester.email']) || ''
-            : '';
-          requesterInfo = extractRequesterInfo(results[2].status === 'fulfilled' ? (results[2].value || {}) : {});
-          email = directEmail || requesterInfo.email || '';
-          phone = requesterInfo.phone || '';
-          requesterId = requesterInfo.id;
-
-          settings = results[3].status === 'fulfilled' ? (results[3].value && results[3].value.settings) || {} : {};
-          context = results[4].status === 'fulfilled' ? (results[4].value || {}) : {};
-          baseUrl = settings.xchk_base_url || 'https://in.xchk.io';
-          subdomain = normalizeSubdomain(settings.zendesk_subdomain)
+          var ticketId = results[0].status === 'fulfilled' ? (results[0].value && results[0].value['ticket.id']) || '' : '';
+          var directEmail = results[1].status === 'fulfilled' ? (results[1].value && results[1].value['ticket.requester.email']) || '' : '';
+          var requesterInfo = extractRequesterInfo(results[2].status === 'fulfilled' ? (results[2].value || {}) : {});
+          var email = directEmail || requesterInfo.email || '';
+          var phone = requesterInfo.phone || '';
+          var requesterId = requesterInfo.id;
+          var settings = results[3].status === 'fulfilled' ? (results[3].value && results[3].value.settings) || {} : {};
+          var context = results[4].status === 'fulfilled' ? (results[4].value || {}) : {};
+          var baseUrl = settings.xchk_base_url || 'https://in.xchk.io';
+          var subdomain = normalizeSubdomain(settings.zendesk_subdomain)
             || normalizeSubdomain(context.account && context.account.subdomain);
 
           if (!subdomain) {
             metaEl.textContent = 'Could not detect Zendesk subdomain.';
             btn.disabled = true;
             showError('Reinstall the app or set zendesk_subdomain in app settings.');
+            setDiag('ERR: no subdomain');
             return;
           }
 
-          // Try client.get('currentUser') as a full object
-          return client.get('currentUser');
-        }).then(function(cuResult) {
-          // cuResult shape: { currentUser: {id, email, name, ...} } or direct {id, email, name}
-          var cu = (cuResult && cuResult.currentUser) || cuResult || {};
-          operatorEmail = (cu && cu.email) ? String(cu.email).trim() : '';
-          operatorName = (cu && cu.name) ? String(cu.name).trim() : '';
-          operatorUserId = (cu && cu.id != null) ? String(cu.id) : '';
+          setDiag('ticket #' + ticketId + ', fetching currentUser...');
 
-          showDebug('GET currentUser=' + JSON.stringify(cuResult).slice(0, 200));
+          // Now try currentUser
+          return client.get('currentUser').then(function(cu) {
+            return { status: 'fulfilled', value: cu };
+          }).catch(function(e) {
+            return { status: 'rejected', reason: e };
+          }).then(function(cuResult) {
+            var op = { email: '', name: '', userId: '' };
 
-          if (operatorEmail || operatorName) {
-            finishSetup();
-            return;
-          }
-
-          // Fallback: try individual field access
-          showDebug('GET currentUser (full) empty, trying fields...');
-          return Promise.allSettled([
-            client.get('currentUser.id'),
-            client.get('currentUser.email'),
-            client.get('currentUser.name')
-          ]);
-        }).then(function(fieldResults) {
-          if (!fieldResults || !Array.isArray(fieldResults)) {
-            // No fallback needed — we already had data or finishSetup was called
-            return;
-          }
-          var idVal = fieldResults[0].status === 'fulfilled' ? fieldResults[0].value : null;
-          var emailVal = fieldResults[1].status === 'fulfilled' ? fieldResults[1].value : null;
-          var nameVal = fieldResults[2].status === 'fulfilled' ? fieldResults[2].value : null;
-
-          showDebug('FIELDS id=' + JSON.stringify(idVal) + ' email=' + JSON.stringify(emailVal) + ' name=' + JSON.stringify(nameVal));
-
-          // Individual field returns may be wrapped as { 'currentUser.id': val } or just val
-          var extractField = function(raw, key) {
-            if (!raw) return '';
-            if (typeof raw === 'string') return raw;
-            if (raw[key]) return String(raw[key]);
-            if (raw.value) return String(raw.value);
-            return '';
-          };
-          operatorUserId = extractField(idVal, 'currentUser.id') || operatorUserId;
-          operatorEmail = extractField(emailVal, 'currentUser.email') || operatorEmail;
-          operatorName = extractField(nameVal, 'currentUser.name') || operatorName;
-
-          finishSetup();
-        }).catch(function(e) {
-          showDebug('currentUser error: ' + (e.message || String(e)));
-          finishSetup();
-        });
-
-        function finishSetup() {
-          if (!operatorEmail && !operatorName) {
-            showDebug('v1.0.14 | currentUser: unavailable — operator info will be on the ticket');
-          } else {
-            showDebug('v1.0.14 | Agent: ' + (operatorName || '') + ' <' + (operatorEmail || '') + '>');
-          }
-
-          function finalize(emailValue, phoneValue, opEmail, opName, opUserId) {
-            if (!emailValue) {
-              metaEl.innerHTML = '<strong>Ticket #' + ticketId + '</strong><br>No requester email on this ticket/profile.';
-              btn.disabled = true;
-              showError('Add a requester email to the customer profile before verifying.');
-              return;
+            if (cuResult.status === 'fulfilled') {
+              var cu = extractCurrentUser(cuResult.value);
+              op.email = (cu.email && String(cu.email).trim()) || '';
+              op.name = (cu.name && String(cu.name).trim()) || '';
+              op.userId = (cu.id != null) ? String(cu.id) : '';
             }
 
-            var agentLabel = '';
-            if (opEmail || opName) {
-              agentLabel = '<br>Agent: ' + (opName && opEmail ? (opName + ' &lt;' + opEmail + '&gt;') : (opName || opEmail));
+            if (op.email || op.name) {
+              setDiag('Agent: ' + (op.name || '') + ' <' + (op.email || '') + '>');
+            } else if (cuResult.status === 'rejected') {
+              setDiag('currentUser rejected: ' + String(cuResult.reason).slice(0, 80));
+            } else {
+              setDiag('currentUser empty — operator info available on ticket');
             }
 
-            metaEl.innerHTML =
-              '<strong>Ticket #' + ticketId + '</strong><br>' +
-              '<span style="color:#68737d;">' + subdomain + '.zendesk.com</span><br>' +
-              'Email: ' + emailValue +
-              (phoneValue ? '<br>Phone: ' + phoneValue : '') +
-              agentLabel;
-
-            btn.onclick = function() {
-              btn.disabled = true;
-              btn.textContent = 'Opening…';
-              errEl.style.display = 'none';
-              mintLaunchUrl(baseUrl, {
-                email: emailValue,
-                mobile: phoneValue || undefined,
-                ticketId: String(ticketId),
-                subdomain: subdomain,
-                operatorEmail: opEmail || undefined,
-                operatorName: opName || undefined,
-                operatorUserId: opUserId || undefined
-              }).then(function(url) {
-                if (!url) throw new Error('No launch URL returned');
-                window.open(url, 'xchk_helpdesk', 'width=1280,height=900,resizable=yes,scrollbars=yes');
-              }).catch(function(e) {
-                var msg = e.message || String(e);
-                if (/403|401|API key|Invalid token/i.test(msg)) {
-                  msg = 'Integrator token missing or invalid. In Zendesk app settings, set XCHK integrator token to a key from XCHK → API & Webhooks → Integrations.';
-                }
-                showError(msg);
-              }).finally(function() {
-                btn.disabled = false;
-                btn.textContent = 'Open Verification Session';
-              });
-            };
-          }
-
-          if (email || !requesterId) {
-            finalize(email, phone, operatorEmail, operatorName, operatorUserId);
-            return;
-          }
-
-          client.request({
-            url: '/api/v2/users/' + encodeURIComponent(requesterId) + '.json',
-            type: 'GET',
-            dataType: 'json'
-          }).then(function(userResponse) {
-            var user = userResponse && userResponse.user ? userResponse.user : {};
-            finalize(user.email || email, user.phone || user.phone_number || phone, operatorEmail, operatorName, operatorUserId);
-          }).catch(function() {
-            finalize(email, phone, operatorEmail, operatorName, operatorUserId);
+            buildUI(email, phone, ticketId, subdomain, requesterId, baseUrl, op.email, op.name, op.userId);
           });
+        }).catch(function(e) {
+          setDiag('boot error: ' + (e.message || String(e)));
+        });
+      }
+
+      function buildUI(email, phone, ticketId, subdomain, requesterId, baseUrl, opEmail, opName, opUserId) {
+        function finalize(emailValue, phoneValue) {
+          if (!emailValue) {
+            metaEl.innerHTML = '<strong>Ticket #' + ticketId + '</strong><br>No requester email.';
+            btn.disabled = true;
+            showError('Add a requester email to the customer profile before verifying.');
+            return;
+          }
+
+          var html = '<strong>Ticket #' + ticketId + '</strong><br>' +
+            '<span style="color:#68737d;">' + subdomain + '.zendesk.com</span><br>' +
+            'Email: ' + emailValue +
+            (phoneValue ? '<br>Phone: ' + phoneValue : '');
+          if (opEmail || opName) {
+            html += '<br>Agent: ' + (opName && opEmail ? (opName + ' &lt;' + opEmail + '&gt;') : (opName || opEmail));
+          }
+          metaEl.innerHTML = html;
+
+          btn.onclick = function() {
+            btn.disabled = true;
+            btn.textContent = 'Opening…';
+            errEl.style.display = 'none';
+            mintLaunchUrl(baseUrl, {
+              email: emailValue, mobile: phoneValue || undefined,
+              ticketId: String(ticketId), subdomain: subdomain,
+              operatorEmail: opEmail || undefined,
+              operatorName: opName || undefined,
+              operatorUserId: opUserId || undefined
+            }).then(function(url) {
+              if (!url) throw new Error('No launch URL returned');
+              window.open(url, 'xchk_helpdesk', 'width=1280,height=900,resizable=yes,scrollbars=yes');
+            }).catch(function(e) {
+              var msg = e.message || String(e);
+              if (/403|401|API key|Invalid token/i.test(msg)) {
+                msg = 'Integrator token missing or invalid. In Zendesk app settings, set XCHK integrator token to a key from XCHK → API & Webhooks → Integrations.';
+              }
+              showError(msg);
+            }).finally(function() {
+              btn.disabled = false;
+              btn.textContent = 'Open Verification Session';
+            });
+          };
         }
+
+        if (email || !requesterId) {
+          finalize(email, phone);
+          return;
+        }
+
+        client.request({
+          url: '/api/v2/users/' + encodeURIComponent(requesterId) + '.json',
+          type: 'GET', dataType: 'json'
+        }).then(function(userResponse) {
+          var user = userResponse && userResponse.user ? userResponse.user : {};
+          finalize(user.email || email, user.phone || user.phone_number || phone);
+        }).catch(function() {
+          finalize(email, phone);
+        });
+      }
+
+      client.on('app.registered', function() {
+        // Small delay — some ZAF environments need a tick before currentUser is available
+        setTimeout(boot, 200);
       });
     })();
   </script>
