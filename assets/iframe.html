@@ -88,8 +88,7 @@
           client.get('ticket.requester.email'),
           client.get('ticket.requester'),
           client.metadata(),
-          client.context(),
-          client.get('currentUser')
+          client.context()
         ]).then(function(results) {
           var ticketId = results[0].status === 'fulfilled' ? (results[0].value && results[0].value['ticket.id']) || '' : '';
           var directEmail = results[1].status === 'fulfilled'
@@ -106,8 +105,8 @@
           var subdomain = normalizeSubdomain(settings.zendesk_subdomain)
             || normalizeSubdomain(context.account && context.account.subdomain);
 
-          // Capture operator (agent) identity via ZAF v2 built-in — no REST API call, no OAuth prompt
-          var cu = results[5].status === 'fulfilled' ? (results[5].value && results[5].value['currentUser']) || {} : {};
+          // Operator (agent) identity from ZAF context — no extra API call, no OAuth prompt
+          var cu = (context && context.currentUser) || {};
           var operatorEmail = cu.email || '';
           var operatorName = cu.name || '';
           var operatorUserId = cu.id != null ? String(cu.id) : '';
